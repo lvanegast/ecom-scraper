@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ecom-scraper-db
+    environment:
+      POSTGRES_USER: scraper
+      POSTGRES_PASSWORD: scraper
+      POSTGRES_DB: ecom_scraper
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scraper -d ecom_scraper"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ecom-scraper-network
+
+  backend:
+    build:
+      context: ./backend
+    container_name: ecom-scraper-backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://scraper:scraper@postgres:5432/ecom_scraper
+      PYTHONUNBUFFERED: "1"
+      ENVIRONMENT: production
+      AMAZON_MAX_PAGES: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    networks:
+      - ecom-scraper-network
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: ecom-scraper-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    networks:
+      - ecom-scraper-network
+
+  pgadmin:
+    image: dpage/pgadmin4:7.4
+    container_name: ecom-scraper-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@ecomscraper.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ecom-scraper-network
+
+volumes:
+  postgres_data:
+
+networks:
+  ecom-scraper-network:
+    driver: bridge
