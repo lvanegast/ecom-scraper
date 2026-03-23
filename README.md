@@ -1,19 +1,60 @@
 # EcomScraper
 
-Herramienta de scraping ecommerce con backend en FastAPI, frontend en React y PostgreSQL. El proyecto permite lanzar jobs de scraping sobre MercadoLibre y Amazon, ver logs en vivo, explorar resultados, comparar productos y exportar datos.
+Herramienta de scraping ecommerce con backend en FastAPI, frontend en React y PostgreSQL. Permite lanzar jobs de scraping sobre MercadoLibre y Amazon, ver logs en vivo, explorar resultados, comparar productos y exportar datos.
 
 ## Estado actual
 
 - MercadoLibre es la fuente principal y la más estable.
 - Amazon funciona con Playwright en modo best-effort.
-- El stack completo ya puede correr con Docker.
-- La agrupación de productos en MercadoLibre es visual y heurística.
+- El stack ya está dockerizado para local y para despliegue en nube.
+- La agrupación de productos en MercadoLibre sigue siendo visual y heurística.
 
-## Inicio rápido
+## Arquitectura
 
-### Docker completo
+### Local
 
-Este es el flujo recomendado.
+`docker-compose.yml` levanta:
+
+- `postgres`
+- `backend`
+- `frontend`
+- `pgadmin`
+
+### Producción / AWS
+
+`docker-compose.prod.yml` levanta:
+
+- `backend`
+- `frontend`
+
+En producción la base de datos sale del contenedor y pasa a Amazon RDS mediante `DATABASE_URL`.
+
+## Archivos de entorno
+
+El proyecto usa solo dos archivos reales, ambos ignorados por Git:
+
+- `.env`: configuración local con Docker
+- `.env.prod`: configuración de producción para EC2 + RDS
+
+No subas esos archivos al repositorio.
+
+## Inicio rápido local
+
+1. Crea `ecom-scraper/.env` con este contenido:
+
+```env
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=tu-clave-local
+POSTGRES_DB=ecom_scraper
+DATABASE_URL=postgresql+asyncpg://postgres:tu-clave-local@postgres:5432/ecom_scraper
+ENVIRONMENT=production
+AMAZON_MAX_PAGES=3
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:3001,http://127.0.0.1:5173
+PGADMIN_DEFAULT_EMAIL=admin@ecomscraper.local
+PGADMIN_DEFAULT_PASSWORD=admin
+```
+
+2. Levanta el stack:
 
 ```bash
 cd ecom-scraper
@@ -29,25 +70,11 @@ Servicios:
 - PostgreSQL: `localhost:5432`
 - pgAdmin: `http://localhost:5050`
 
-Credenciales de pgAdmin:
-
-- email: `admin@ecomscraper.local`
-- password: `admin`
-
 Validación rápida:
 
 1. Abre `http://localhost:3000`
 2. Crea un job desde la UI
-3. Revisa el panel de logs y la tabla de resultados
-
-## Servicios Docker
-
-`docker-compose.yml` levanta:
-
-- `postgres`
-- `backend`
-- `frontend`
-- `pgadmin`
+3. Revisa logs en vivo y la tabla de resultados
 
 Comandos útiles:
 
@@ -64,7 +91,43 @@ Si quieres borrar también el volumen de PostgreSQL:
 docker-compose down -v
 ```
 
-## Desarrollo local alterno
+## Despliegue base en AWS EC2 + RDS
+
+1. Crea `ecom-scraper/.env.prod` con este contenido:
+
+```env
+DATABASE_URL=postgresql+asyncpg://postgres:tu-clave-rds@ecom-scraper.cc124kes8ijq.us-east-1.rds.amazonaws.com:5432/ecom-scraper
+ALLOWED_ORIGINS=http://54.87.44.159
+AMAZON_MAX_PAGES=3
+```
+
+2. Levanta el stack de producción:
+
+```bash
+docker-compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+```
+
+Con ese archivo:
+
+- `frontend` queda publicado en el puerto `80`
+- `backend` queda accesible solo dentro de la red Docker
+- `frontend` hace proxy a `/api` y `/ws` hacia `backend`
+- RDS reemplaza al contenedor `postgres`
+
+3. Validar:
+
+- App: `http://54.87.44.159`
+- Health vía frontend/proxy: `http://54.87.44.159/api/health`
+
+4. Recomendaciones para AWS:
+
+- Abre en el Security Group del EC2 solo `80`, `443` y `22`.
+- Restringe `22` a tu IP cuando termines de configurar.
+- No expongas `pgadmin` en producción.
+- Permite que el Security Group de RDS acepte tráfico desde el EC2 en `5432`.
+- Si vas a usar dominio, añade TLS con Nginx, Caddy o un balanceador.
+
+## Desarrollo local alterno sin Docker completo
 
 Si quieres desarrollar fuera de Docker, puedes levantar solo la base y correr backend/frontend localmente.
 
@@ -88,9 +151,17 @@ cd backend
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
 ./venv/bin/alembic upgrade head
 python main.py
+```
+
+Si quieres usar `backend/.env`, puedes definir por ejemplo:
+
+```env
+DATABASE_URL=postgresql+asyncpg://postgres:tu-clave-local@localhost:5432/ecom_scraper
+PYTHONUNBUFFERED=1
+ENVIRONMENT=development
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:5173
 ```
 
 ### Frontend local
@@ -101,35 +172,7 @@ npm install
 npm run dev
 ```
 
-## Variables de entorno
-
-Con Docker completo, no necesitas crear `.env` manualmente para arrancar el proyecto local.
-
-Los archivos `.env` quedan como opción para:
-
-- desarrollo local fuera de Docker
-- cambiar configuración sin editar código
-- preparar despliegue en EC2 o ambientes distintos
-
-### Backend local
-
-Archivo opcional: `backend/.env`
-
-```env
-DATABASE_URL=postgresql+asyncpg://scraper:scraper@localhost:5432/ecom_scraper
-PYTHONUNBUFFERED=1
-ENVIRONMENT=development
-```
-
-Variable útil para Amazon:
-
-```bash
-AMAZON_MAX_PAGES=3 python main.py
-```
-
-### Frontend local
-
-Archivo opcional: `frontend/.env`
+Si quieres usar `frontend/.env`, puedes definir por ejemplo:
 
 ```env
 VITE_API_URL=http://localhost:8000
@@ -159,12 +202,14 @@ VITE_APP_NAME=EcomScraper
 
 - Backend: FastAPI, SQLAlchemy async, Alembic, Playwright, lxml, httpx
 - Frontend: React 18, Vite, Tailwind, Recharts
-- Infra: PostgreSQL 16, pgAdmin, Docker Compose
+- Infra local: PostgreSQL 16, pgAdmin, Docker Compose
+- Infra prod: EC2 + Docker Compose + RDS
 
 ## Notas importantes
 
 - El frontend en Docker se sirve con Nginx y hace proxy a `/api` y `/ws`.
 - El backend en Docker usa una imagen con Playwright + Chromium.
+- El backend soporta `ALLOWED_ORIGINS` por variable de entorno para CORS.
 - Si cambias lógica de scraping, debes correr jobs nuevos para ver el efecto en la base.
 - Amazon puede devolver resultados inconsistentes o activar bloqueos anti-bot.
 - MercadoLibre cambia HTML con frecuencia, así que algunos selectores pueden requerir mantenimiento.
@@ -172,12 +217,14 @@ VITE_APP_NAME=EcomScraper
 
 ## Archivos clave
 
-- Backend principal: [/home/lvanegas/Downloads/scrap/ecom-scraper/backend/main.py](/home/lvanegas/Downloads/scrap/ecom-scraper/backend/main.py)
-- Jobs: [/home/lvanegas/Downloads/scrap/ecom-scraper/backend/jobs.py](/home/lvanegas/Downloads/scrap/ecom-scraper/backend/jobs.py)
-- Scraper MercadoLibre: [/home/lvanegas/Downloads/scrap/ecom-scraper/backend/scraper/mercadolibre.py](/home/lvanegas/Downloads/scrap/ecom-scraper/backend/scraper/mercadolibre.py)
-- Scraper Amazon: [/home/lvanegas/Downloads/scrap/ecom-scraper/backend/scraper/amazon.py](/home/lvanegas/Downloads/scrap/ecom-scraper/backend/scraper/amazon.py)
-- Comparación: [/home/lvanegas/Downloads/scrap/ecom-scraper/backend/compare.py](/home/lvanegas/Downloads/scrap/ecom-scraper/backend/compare.py)
-- Tabla de resultados: [/home/lvanegas/Downloads/scrap/ecom-scraper/frontend/src/components/ResultsTable.jsx](/home/lvanegas/Downloads/scrap/ecom-scraper/frontend/src/components/ResultsTable.jsx)
+- `docker-compose.yml`
+- `docker-compose.prod.yml`
+- `backend/main.py`
+- `backend/jobs.py`
+- `backend/scraper/mercadolibre.py`
+- `backend/scraper/amazon.py`
+- `backend/compare.py`
+- `frontend/src/components/ResultsTable.jsx`
 
 ## Troubleshooting
 
@@ -190,10 +237,6 @@ lsof -i :8000
 lsof -i :3000
 ```
 
-### `FATAL: database "scraper" does not exist`
-
-El `healthcheck` de Docker debe apuntar a `ecom_scraper`, no a `scraper`.
-
 ### `Failed to fetch`
 
 Verifica:
@@ -203,11 +246,17 @@ Verifica:
 
 ### Playwright falla en Docker o servidor
 
-Revisa:
-
 ```bash
 docker-compose logs -f backend
 ```
+
+### Producción en EC2 no conecta a RDS
+
+Revisa:
+
+- `DATABASE_URL` correcto
+- reglas del Security Group de RDS
+- que el EC2 pueda salir a Internet si Playwright necesita acceso externo
 
 ## Licencia
 

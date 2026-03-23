@@ -6,6 +6,7 @@ import asyncio
 import logging
 import csv
 import json
+import os
 from datetime import datetime
 from typing import Set
 from contextlib import asynccontextmanager
@@ -96,18 +97,30 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS Middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+def get_allowed_origins() -> list[str]:
+    """Read allowed CORS origins from env, with sensible local defaults."""
+    configured_origins = os.getenv("ALLOWED_ORIGINS")
+    if configured_origins:
+        return [origin.strip() for origin in configured_origins.split(",") if origin.strip()]
+
+    return [
         "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:5173",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
         "http://127.0.0.1:5173",
-    ],  # React dev servers
-    allow_credentials=True,
+    ]
+
+
+allowed_origins = get_allowed_origins()
+allow_credentials = "*" not in allowed_origins
+
+# CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
