@@ -46,3 +46,7 @@ frontend/.env
 *.swo
 *~
 .DS_Store
+
+# Claude Code
+CLAUDE.md
+docs/superpowers/
