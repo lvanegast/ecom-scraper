@@ -13,10 +13,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.openapi.utils import get_openapi
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, desc
 from sqlalchemy.orm import selectinload
+import httpx
 import uvicorn
 
 from database import get_db, engine, Base
@@ -94,7 +96,9 @@ app = FastAPI(
     title="EcomScraper API",
     description="Real-time ecommerce scraping with WebSocket streaming",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
 )
 
 def get_allowed_origins() -> list[str]:
@@ -143,6 +147,46 @@ async def create_log_callback(job_id: int):
 async def health_check():
     """Health check endpoint"""
     return {"status": "ok", "service": "EcomScraper"}
+
+@app.get("/api/docs", include_in_schema=False)
+async def scalar_docs():
+    return HTMLResponse("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>EcomScraper API Docs</title>
+        <meta charset="utf-8" />
+    </head>
+    <body>
+        <script
+            id="api-reference"
+            data-url="/api/openapi.json"
+            data-configuration='{"theme": "purple", "layout": "modern"}'
+        ></script>
+        <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+    </body>
+    </html>
+    """)
+
+@app.get("/api/openapi.json", include_in_schema=False)
+async def openapi_json():
+    return get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+
+@app.get("/api/my-ip")
+async def get_my_ip():
+    """Verifica la IP publica desde donde sale el trafico del backend"""
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get("https://api.ipify.org?format=json")
+        data = response.json()
+        return {
+            "outbound_ip": data.get("ip"),
+            "note": "Esta IP debe coincidir con la Elastic IP del NAT Gateway"
+        }
 
 # ============ Job Management Endpoints ============
 
