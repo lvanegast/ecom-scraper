@@ -30,11 +30,15 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-production}
       AMAZON_MAX_PAGES: ${AMAZON_MAX_PAGES:-3}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:3001,http://127.0.0.1:5173}
+      USD_COP_RATE: ${USD_COP_RATE:-4100}
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - "8000:8000"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     networks:
       - ecom-scraper-network
 

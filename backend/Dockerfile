@@ -3,6 +3,7 @@ FROM mcr.microsoft.com/playwright/python:v1.41.2-jammy
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 

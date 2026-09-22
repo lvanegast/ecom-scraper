@@ -211,22 +211,32 @@ class AmazonScraper(BaseScraper):
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-blink-features=AutomationControlled",
+                    "--dns-result-order=ipv4first",
                 ]
             )
             context = await browser.new_context(
-                user_agent=self.HEADERS.get("User-Agent"),
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
                 locale="en-US",
-                viewport={"width": 1920, "height": 1080},
+                viewport={"width": 1366, "height": 768},
                 extra_http_headers={
-                    k: v for k, v in self.HEADERS.items()
-                    if k.lower() != "user-agent"
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "sec-ch-ua": '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": '"Windows"',
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "none",
+                    "Sec-Fetch-User": "?1",
+                    "Upgrade-Insecure-Requests": "1",
                 },
             )
-            # Stealth evasion: conceal navigator.webdriver
+            # Stealth evasion: conceal webdriver, mock chrome runtime and plugins
             await context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                });
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                window.chrome = { runtime: {} };
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
             """)
 
             page = await context.new_page()
@@ -292,7 +302,8 @@ class AmazonScraper(BaseScraper):
             "captcha",
             "503 Service Unavailable",
             "To discuss automated access to Amazon data",
-            "Robot Check"
+            "Robot Check",
+            "Sorry! Something went wrong!",
         ]
         
         html_lower = html_content.lower()

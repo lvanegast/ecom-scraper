@@ -11,6 +11,7 @@ services:
       ENVIRONMENT: production
       AMAZON_MAX_PAGES: ${AMAZON_MAX_PAGES:-3}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
+      USD_COP_RATE: ${USD_COP_RATE:-4100}
     restart: unless-stopped
     expose:
       - "8000"
