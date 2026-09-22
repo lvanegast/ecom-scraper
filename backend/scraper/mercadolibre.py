@@ -138,16 +138,28 @@ class MercadoLibreScraper(BaseScraper):
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox"]
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                ]
             )
             context = await browser.new_context(
                 user_agent=self.HEADERS.get("User-Agent"),
                 locale="es-CO",
+                viewport={"width": 1920, "height": 1080},
                 extra_http_headers={
                     k: v for k, v in self.HEADERS.items()
                     if k.lower() != "user-agent"
                 },
             )
+            # Stealth evasion: conceal navigator.webdriver
+            await context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+            """)
             page = await context.new_page()
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=60000)

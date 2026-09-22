@@ -104,48 +104,39 @@ class AmazonScraper(BaseScraper):
                 "info"
             )
 
-            # Prefer Playwright (renders JS)
+            # Prefer Playwright with single browser session
             products = []
             seen_urls = set()
-            for idx, url in enumerate(search_urls, 1):
+            html_pages = []
+
+            try:
+                await self.send_log("🧭 Usando navegador real optimizado (Playwright)...", "info")
+                html_pages = await self._fetch_pages_with_playwright(search_urls)
+            except ImportError:
                 await self.send_log(
-                    f"📄 Página {idx}/{len(search_urls)}: cargando resultados...",
-                    "info"
+                    "❌ Playwright no instalado. Instala con: uv run playwright install chromium",
+                    "error"
                 )
-                html_content = None
-                try:
-                    await self.send_log("🧭 Usando navegador real (Playwright)...", "info")
-                    html_content = await self._fetch_with_playwright(url)
-                except ImportError:
-                    await self.send_log(
-                        "❌ Playwright no instalado. Instala con: pip install playwright "
-                        "y luego: python -m playwright install chromium",
-                        "error"
-                    )
-                    return []
-                except Exception as e:
-                    await self.send_log(
-                        f"⚠️ Playwright falló ({e}). Intentando HTTPX...",
-                        "warning"
-                    )
-                    await self._init_client()
-                    html_content = await self._fetch_with_httpx(url)
+                return []
+            except Exception as e:
+                await self.send_log(
+                    f"⚠️ Playwright falló ({e}). Intentando HTTPX por página...",
+                    "warning"
+                )
+                await self._init_client()
+                for u in search_urls:
+                    try:
+                        content = await self._fetch_with_httpx(u)
+                        if content:
+                            html_pages.append(content)
+                    except Exception:
+                        pass
 
-                if not html_content:
-                    await self.send_log("❌ No se pudo obtener HTML", "error")
-                    continue
+            if not html_pages:
+                await self.send_log("❌ No se pudo obtener HTML de ninguna página", "error")
+                return []
 
-                # Check if IP is blocked
-                if self._is_ip_blocked(html_content):
-                    error_msg = "⚠️ Amazon bloqueó la sesión (captcha/robot). " \
-                               "Podrías necesitar proxies o rotación."
-                    await self.send_log(error_msg, "warning")
-                    self.logger.warning(error_msg)
-                    break
-
-                await self.send_log("✓ Página cargada correctamente", "success")
-
-                # Parse HTML
+            for page_idx, html_content in enumerate(html_pages, 1):
                 page_products = await self._parse_products(html_content)
                 for p in page_products:
                     if p.product_url and p.product_url in seen_urls:
@@ -204,46 +195,88 @@ class AmazonScraper(BaseScraper):
         response.raise_for_status()
         return response.text
 
-    async def _fetch_with_playwright(self, url: str) -> str:
-        """Fetch HTML using Playwright (JS rendering)"""
+    async def _fetch_pages_with_playwright(self, urls: List[str]) -> List[str]:
+        """Fetch multiple page HTMLs using a single Playwright browser context"""
         try:
             from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
         except Exception as e:
             raise ImportError("playwright not installed") from e
 
+        html_pages = []
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox"]
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                ]
             )
             context = await browser.new_context(
                 user_agent=self.HEADERS.get("User-Agent"),
                 locale="en-US",
+                viewport={"width": 1920, "height": 1080},
                 extra_http_headers={
                     k: v for k, v in self.HEADERS.items()
                     if k.lower() != "user-agent"
                 },
             )
+            # Stealth evasion: conceal navigator.webdriver
+            await context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+            """)
+
             page = await context.new_page()
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                # Wait for search results (best-effort)
-                try:
-                    await page.wait_for_selector(
-                        "div[data-component-type='s-search-result'], .s-main-slot",
-                        timeout=20000
-                    )
-                except PlaywrightTimeoutError:
+                for idx, url in enumerate(urls, 1):
                     await self.send_log(
-                        "⚠️ No se detectaron resultados a tiempo; leyendo HTML igual.",
-                        "warning"
+                        f"📄 Página {idx}/{len(urls)}: cargando resultados...",
+                        "info"
                     )
-                html_content = await page.content()
+                    try:
+                        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                        try:
+                            await page.wait_for_selector(
+                                "div[data-component-type='s-search-result'], .s-main-slot",
+                                timeout=20000
+                            )
+                        except PlaywrightTimeoutError:
+                            await self.send_log(
+                                f"⚠️ Página {idx}: no se detectaron resultados a tiempo; leyendo HTML igual.",
+                                "warning"
+                            )
+
+                        try:
+                            await page.evaluate("() => window.scrollBy(0, 500)")
+                            await page.wait_for_timeout(300)
+                        except Exception:
+                            pass
+
+                        html = await page.content()
+                        html_pages.append(html)
+
+                        if self._is_ip_blocked(html):
+                            await self.send_log(
+                                "⚠️ Amazon bloqueó la sesión (captcha/robot). Deteniendo páginas siguientes.",
+                                "warning"
+                            )
+                            break
+                    except Exception as page_err:
+                        await self.send_log(f"⚠️ Error cargando página {idx}: {page_err}", "warning")
+                        continue
             finally:
                 await context.close()
                 await browser.close()
 
-        return html_content
+        return html_pages
+
+    async def _fetch_with_playwright(self, url: str) -> str:
+        """Fetch single HTML using Playwright (wrapper around _fetch_pages_with_playwright)"""
+        pages = await self._fetch_pages_with_playwright([url])
+        return pages[0] if pages else ""
     
     def _is_ip_blocked(self, html_content: str) -> bool:
         """
