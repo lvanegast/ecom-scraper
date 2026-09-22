@@ -1,7 +1,7 @@
 """
 Pydantic schemas for request/response validation
 """
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, ConfigDict
 from datetime import datetime
 from typing import Optional, List
 from enum import Enum
@@ -11,6 +11,7 @@ class JobStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 class ScraperSource(str, Enum):
     MERCADOLIBRE = "mercadolibre"
@@ -41,8 +42,7 @@ class JobResponse(BaseModel):
     updated_at: datetime
     error_message: Optional[str]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # ============ Product Schemas ============
 class PriceHistoryResponse(BaseModel):
@@ -51,8 +51,7 @@ class PriceHistoryResponse(BaseModel):
     price: float
     scraped_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ProductResponse(BaseModel):
     """Schema for product response"""
@@ -71,8 +70,7 @@ class ProductResponse(BaseModel):
     scraped_at: datetime
     price_history: List[PriceHistoryResponse] = []
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ProductCreate(BaseModel):
     """Schema for creating a product (internal use)"""
@@ -99,6 +97,16 @@ class LogMessage(BaseModel):
     level: str  # "info", "success", "warning", "error"
     message: str
     job_id: int
+
+class JobLogResponse(BaseModel):
+    """Schema for stored job log entry"""
+    id: int
+    job_id: int
+    level: str
+    message: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 class ScrapeUpdateMessage(BaseModel):
     """Schema for scrape progress update"""
