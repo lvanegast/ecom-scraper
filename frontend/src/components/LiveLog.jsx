@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { AlertCircle, CheckCircle, InfoIcon, AlertTriangle } from 'lucide-react';
-import { wsUrl } from '../lib/api';
+import { wsUrl, apiUrl } from '../lib/api';
 
 const getLogIcon = (level) => {
   switch (level) {
@@ -34,6 +34,25 @@ export default function LiveLog({ jobId }) {
   const messagesEndRef = useRef(null);
   const wsRef = useRef(null);
 
+  // Fetch persisted history
+  useEffect(() => {
+    if (!jobId) return;
+
+    fetch(apiUrl(`/api/jobs/${jobId}/logs`))
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setLogs(data.map((l) => ({
+            timestamp: l.created_at,
+            level: l.level,
+            message: l.message,
+            job_id: l.job_id,
+          })));
+        }
+      })
+      .catch((err) => console.error('Error loading job logs:', err));
+  }, [jobId]);
+
   useEffect(() => {
     if (!jobId) return;
 
@@ -42,12 +61,18 @@ export default function LiveLog({ jobId }) {
     ws.onopen = () => {
       console.log('WebSocket connected');
       setIsConnected(true);
-      setLogs([]);
     };
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      setLogs((prevLogs) => [...prevLogs, data]);
+      setLogs((prevLogs) => {
+        // Prevent duplicate messages if already present
+        const isDuplicate = prevLogs.some(
+          (l) => l.message === data.message && Math.abs(new Date(l.timestamp) - new Date(data.timestamp)) < 2000
+        );
+        if (isDuplicate) return prevLogs;
+        return [...prevLogs, data];
+      });
     };
 
     ws.onerror = (error) => {

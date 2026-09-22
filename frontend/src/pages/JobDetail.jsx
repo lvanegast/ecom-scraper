@@ -97,19 +97,39 @@ export default function JobDetail() {
             </div>
             <div>
               <p className="text-[color:var(--muted)] text-sm mb-1">Estado</p>
-              <span
-                className={`px-3 py-1 rounded-full font-semibold text-sm capitalize inline-block border ${
-                  job.status === 'completed'
-                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                    : job.status === 'running'
-                    ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
-                    : job.status === 'failed'
-                    ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
-                    : 'bg-slate-700/30 text-slate-300 border-slate-600/40'
-                }`}
-              >
-                {job.status}
-              </span>
+              <div className="flex items-center gap-2">
+                {(job.status === 'running' || job.status === 'pending') && (
+                  <button
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(apiUrl(`/api/jobs/${job.id}/cancel`), { method: 'POST' });
+                        if (res.ok) {
+                          const data = await res.json();
+                          setJob(data);
+                        }
+                      } catch (e) {
+                        console.error(e);
+                      }
+                    }}
+                    className="px-2 py-0.5 rounded text-xs font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30"
+                  >
+                    ⏹️ Cancelar
+                  </button>
+                )}
+                <span
+                  className={`px-3 py-1 rounded-full font-semibold text-sm capitalize inline-block border ${
+                    job.status === 'completed'
+                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                      : job.status === 'running'
+                      ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                      : job.status === 'failed' || job.status === 'cancelled'
+                      ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                      : 'bg-slate-700/30 text-slate-300 border-slate-600/40'
+                  }`}
+                >
+                  {job.status}
+                </span>
+              </div>
             </div>
             <div>
               <p className="text-[color:var(--muted)] text-sm mb-1">Guardados</p>

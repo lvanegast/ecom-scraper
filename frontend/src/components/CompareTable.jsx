@@ -113,8 +113,21 @@ export default function CompareTable({ results }) {
                     <span className={`text-[10px] ${confidenceColor}`}>{confidence}</span>
                   </div>
                 </td>
-                <td className={`py-4 px-4 whitespace-nowrap text-right ${diffColor}`}>
-                  {diff === null ? '-' : formatPrice(Math.abs(diff), amz?.currency)}
+                <td className={`py-4 px-4 whitespace-nowrap text-right`}>
+                  {diff === null ? (
+                    <span className="text-[color:var(--muted)]">-</span>
+                  ) : (
+                    <div className="flex flex-col items-end">
+                      <span className={`font-semibold ${diffColor}`}>
+                        {diff > 0 ? '+' : '-'}${Math.abs(row.price_diff_usd ?? diff).toFixed(2)} USD
+                      </span>
+                      {row.price_diff_cop !== undefined && row.price_diff_cop !== null && (
+                        <span className="text-[10px] text-[color:var(--muted)]">
+                          ~${Math.abs(row.price_diff_cop).toLocaleString('es-CO')} COP
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </td>
               </tr>
             );

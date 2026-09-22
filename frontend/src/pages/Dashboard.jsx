@@ -128,25 +128,45 @@ export default function Dashboard() {
                 <div className="card p-6">
                   <div className="flex items-center justify-between mb-4">
                     <h2 className="text-2xl font-semibold text-[color:var(--text)]">📋 Estado del Job</h2>
-                    <span
-                      className={`px-4 py-2 rounded-full font-semibold text-sm capitalize border ${
-                        currentJob.status === 'completed'
-                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                          : currentJob.status === 'running'
-                          ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
-                          : currentJob.status === 'failed'
-                          ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
-                          : 'bg-slate-700/30 text-slate-300 border-slate-600/40'
-                      }`}
-                    >
-                      {currentJob.status === 'running' && (
-                        <span className="flex items-center gap-2">
-                          <Loader size={16} className="animate-spin" />
-                          {currentJob.status}
-                        </span>
+                    <div className="flex items-center gap-3">
+                      {(currentJob.status === 'running' || currentJob.status === 'pending') && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              const res = await fetch(apiUrl(`/api/jobs/${currentJob.id}/cancel`), { method: 'POST' });
+                              if (res.ok) {
+                                const data = await res.json();
+                                setCurrentJob(data);
+                              }
+                            } catch (e) {
+                              console.error(e);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition"
+                        >
+                          ⏹️ Cancelar
+                        </button>
                       )}
-                      {currentJob.status !== 'running' && currentJob.status}
-                    </span>
+                      <span
+                        className={`px-4 py-2 rounded-full font-semibold text-sm capitalize border ${
+                          currentJob.status === 'completed'
+                            ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                            : currentJob.status === 'running'
+                            ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                            : currentJob.status === 'failed' || currentJob.status === 'cancelled'
+                            ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                            : 'bg-slate-700/30 text-slate-300 border-slate-600/40'
+                        }`}
+                      >
+                        {currentJob.status === 'running' && (
+                          <span className="flex items-center gap-2">
+                            <Loader size={16} className="animate-spin" />
+                            {currentJob.status}
+                          </span>
+                        )}
+                        {currentJob.status !== 'running' && currentJob.status}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
