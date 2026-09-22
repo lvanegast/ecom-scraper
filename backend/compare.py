@@ -10,14 +10,18 @@ from typing import Dict, Optional, Tuple, Set
 
 BRANDS = {
     "hp", "hewlett", "dell", "lenovo", "asus", "acer", "msi", "apple",
-    "samsung", "huawei", "gigabyte", "razer", "microsoft",
+    "samsung", "huawei", "gigabyte", "razer", "microsoft", "sony",
+    "nintendo", "logitech", "canon", "nikon", "xiaomi", "motorola",
+    "lg", "bose", "jbl", "gopro", "dji", "google", "anker",
+    "playstation", "xbox", "panasonic", "philips", "tcl", "hisense"
 }
 
 STOPWORDS = {
     "portatil", "portátil", "laptop", "notebook", "computador", "pc",
     "nuevo", "nueva", "oferta", "promo", "envio", "envío", "gratis",
     "original", "disponible", "color", "edition", "version", "modelo",
-    "win", "windows", "home", "pro",
+    "win", "windows", "home", "pro", "gen", "con", "sin", "de", "para",
+    "y", "el", "la", "los", "las", "un", "una",
 }
 
 CPU_PATTERNS = [
@@ -26,8 +30,8 @@ CPU_PATTERNS = [
     r"\bcore\s+ultra\s*\d\b",
     r"\bultra\s*\d\b",
     r"\bryzen\s*[3579]\b",
-    r"\bapple\s+m[123]\b",
-    r"\bm[123]\b",
+    r"\bapple\s+m[1234]\b",
+    r"\bm[1234]\b",
 ]
 
 
@@ -61,20 +65,35 @@ def _token_set(text: str) -> Set[str]:
     return set(tokens)
 
 
-def extract_features(title: str) -> Dict[str, Optional[str]]:
+def extract_features(title: str) -> Dict[str, Optional[any]]:
     """
-    Extract brand, cpu, ram, storage, screen from a title.
-    Returns string values (normalized) or None.
+    Extract brand, model codes, cpu, ram, storage, screen from a title.
+    Returns string/set values (normalized) or None.
     """
     norm = normalize_text(title)
     tokens = set(norm.split())
 
+    # Detect brand
     brand = None
     for b in BRANDS:
         if b in tokens:
             brand = "hp" if b == "hewlett" else b
             break
 
+    # Extract model codes (e.g. 3520, ps5, g15, wh-1000xm5, rtx4060, a54, s23)
+    model_codes = set()
+    for tok in tokens:
+        if tok in STOPWORDS:
+            continue
+        if tok.isdigit() and len(tok) in (3, 4, 5) and tok not in {"2020", "2021", "2022", "2023", "2024", "2025", "2026"}:
+            model_codes.add(tok)
+        elif len(tok) >= 3 and any(c.isdigit() for c in tok) and any(c.isalpha() for c in tok):
+            # Exclude simple storage/ram tokens like 8gb, 512gb, 1tb
+            if re.match(r"^\d{1,4}(gb|tb|mb|hz|ghz|mah|w|p|k)$", tok):
+                continue
+            model_codes.add(tok)
+
+    # CPU
     cpu = None
     for pattern in CPU_PATTERNS:
         match = re.search(pattern, norm)
@@ -87,11 +106,13 @@ def extract_features(title: str) -> Dict[str, Optional[str]]:
             )
             break
 
+    # RAM
     ram = None
     ram_match = re.search(r"(\d{1,2})\s?gb\s?(ram)?", norm)
     if ram_match:
         ram = f"{ram_match.group(1)}gb"
 
+    # Storage
     storage = None
     storage_match = re.search(r"(\d{3,4})\s?gb|\b(\d)\s?tb\b", norm)
     if storage_match:
@@ -100,13 +121,15 @@ def extract_features(title: str) -> Dict[str, Optional[str]]:
         else:
             storage = f"{storage_match.group(2)}tb"
 
+    # Screen (search in original title to preserve inch quote symbol)
     screen = None
-    screen_match = re.search(r"(\d{2}([.,]\d)?)\s?\"", norm)
+    screen_match = re.search(r"(\d{2}(?:[.,]\d)?)\s*(?:\"|pulg|pulgadas|in\b)", title, re.IGNORECASE)
     if screen_match:
         screen = screen_match.group(1).replace(",", ".")
 
     return {
         "brand": brand,
+        "model_codes": model_codes,
         "cpu": cpu,
         "ram": ram,
         "storage": storage,
@@ -138,37 +161,86 @@ def token_overlap(a: str, b: str) -> float:
     return len(inter) / max(len(a_set), len(b_set))
 
 
-def score_match(a: Dict[str, Optional[str]], b: Dict[str, Optional[str]]) -> float:
+def score_match(a: Dict[str, Optional[any]], b: Dict[str, Optional[any]]) -> float:
+    # If both have a detected brand and they differ, this is almost certainly NOT a match
+    if a.get("brand") and b.get("brand") and a["brand"] != b["brand"]:
+        return 0.0
+
+    # Base weights
     weights = {
+        "title": 0.35,
+        "tokens": 0.25,
         "brand": 0.15,
-        "cpu": 0.20,
-        "ram": 0.10,
-        "storage": 0.10,
-        "screen": 0.10,
-        "title": 0.20,
-        "tokens": 0.15,
+        "model_codes": 0.25,
     }
 
-    score = 0.0
-    if a.get("brand") and b.get("brand") and a["brand"] == b["brand"]:
-        score += weights["brand"]
-    if a.get("cpu") and b.get("cpu") and a["cpu"] == b["cpu"]:
-        score += weights["cpu"]
-    if a.get("ram") and b.get("ram") and a["ram"] == b["ram"]:
-        score += weights["ram"]
-    if a.get("storage") and b.get("storage") and a["storage"] == b["storage"]:
-        score += weights["storage"]
-    if a.get("screen") and b.get("screen") and a["screen"] == b["screen"]:
-        score += weights["screen"]
+    # Spec weights if present in either product
+    has_specs = any([
+        a.get("cpu") or b.get("cpu"),
+        a.get("ram") or b.get("ram"),
+        a.get("storage") or b.get("storage"),
+        a.get("screen") or b.get("screen"),
+    ])
 
-    score += title_similarity(a.get("norm_title", ""), b.get("norm_title", "")) * weights["title"]
-    score += token_overlap(a.get("norm_title", ""), b.get("norm_title", "")) * weights["tokens"]
-    return round(score, 4)
+    if has_specs:
+        weights = {
+            "title": 0.20,
+            "tokens": 0.15,
+            "brand": 0.15,
+            "model_codes": 0.20,
+            "cpu": 0.10,
+            "ram": 0.08,
+            "storage": 0.07,
+            "screen": 0.05,
+        }
+
+    total_score = 0.0
+    total_possible_weight = 0.0
+
+    # Brand matching
+    if a.get("brand") and b.get("brand"):
+        total_possible_weight += weights["brand"]
+        if a["brand"] == b["brand"]:
+            total_score += weights["brand"]
+
+    # Model code matching
+    a_codes = a.get("model_codes") or set()
+    b_codes = b.get("model_codes") or set()
+    if a_codes and b_codes:
+        total_possible_weight += weights["model_codes"]
+        code_overlap = len(a_codes.intersection(b_codes)) / max(len(a_codes), len(b_codes))
+        total_score += code_overlap * weights["model_codes"]
+    elif a_codes or b_codes:
+        total_possible_weight += weights["model_codes"] * 0.5
+
+    # Specs
+    if has_specs:
+        for spec_key in ["cpu", "ram", "storage", "screen"]:
+            val_a = a.get(spec_key)
+            val_b = b.get(spec_key)
+            if val_a and val_b:
+                total_possible_weight += weights[spec_key]
+                if val_a == val_b:
+                    total_score += weights[spec_key]
+            elif val_a or val_b:
+                total_possible_weight += weights[spec_key] * 0.5
+
+    # Text & token similarities
+    total_possible_weight += weights["title"] + weights["tokens"]
+    sim = title_similarity(a.get("norm_title", ""), b.get("norm_title", ""))
+    overlap = token_overlap(a.get("norm_title", ""), b.get("norm_title", ""))
+
+    total_score += sim * weights["title"]
+    total_score += overlap * weights["tokens"]
+
+    # Normalize by total possible weight to avoid artificially depressing scores of non-laptop items
+    final_score = total_score / total_possible_weight if total_possible_weight > 0 else 0.0
+    return round(min(1.0, final_score), 4)
 
 
 def best_match_for(
-    base_features: Dict[str, Optional[str]],
-    candidates: Dict[int, Dict[str, Optional[str]]],
+    base_features: Dict[str, Optional[any]],
+    candidates: Dict[int, Dict[str, Optional[any]]],
 ) -> Tuple[Optional[int], float]:
     best_id = None
     best_score = 0.0

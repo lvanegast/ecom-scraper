@@ -67,14 +67,26 @@ class ScrapingJobManager:
             scraper = await self.get_scraper(job.source, getattr(job, "filter_mode", "smart"))
             
             try:
+                # Check if cancelled before scrape starts
+                chk = await self.db.execute(select(Job.status).where(Job.id == job_id))
+                if chk.scalars().first() == JobStatus.CANCELLED:
+                    await self._log("🛑 Job cancelado antes del scraping.", "warning")
+                    return False
+
                 # Execute scraping
                 scraped_products = await scraper.scrape(query)
-                
+
+                # Check if cancelled during scrape
+                chk = await self.db.execute(select(Job.status).where(Job.id == job_id))
+                if chk.scalars().first() == JobStatus.CANCELLED:
+                    await self._log("🛑 Job cancelado por el usuario tras la captura.", "warning")
+                    return False
+
                 # Save products to database
                 saved_count, duplicate_count, error_count = await self._save_products(
                     job_id, scraped_products
                 )
-                
+
                 # Update job status to COMPLETED
                 await self.db.execute(
                     update(Job)
@@ -89,24 +101,29 @@ class ScrapingJobManager:
                     )
                 )
                 await self.db.commit()
-                
+
                 await self._log(
                     "✅ Job completado: "
                     f"{saved_count} guardados, {duplicate_count} duplicados, "
                     f"{error_count} errores (de {len(scraped_products)} encontrados)",
                     "success"
                 )
-                
+
                 return True
-                
+
             finally:
                 await scraper.close()
-                
+
         except Exception as e:
+            # If job was marked cancelled, don't overwrite with FAILED
+            chk = await self.db.execute(select(Job.status).where(Job.id == job_id))
+            if chk.scalars().first() == JobStatus.CANCELLED:
+                return False
+
             error_msg = f"❌ Error en job {job_id}: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             await self._log(error_msg, "error")
-            
+
             # Update job status to FAILED
             try:
                 await self.db.execute(
@@ -120,11 +137,11 @@ class ScrapingJobManager:
                 await self.db.commit()
             except Exception as db_error:
                 self.logger.error(f"Error updating job status: {db_error}")
-            
+
             return False
-    
+
     async def _save_products(self, job_id: int, scraped_products: list):
-        """Save scraped products to database
+        """Save scraped products to database with cross-job price history tracking
 
         Returns:
             (saved_count, duplicate_count, error_count)
@@ -132,12 +149,14 @@ class ScrapingJobManager:
         saved_count = 0
         duplicate_count = 0
         error_count = 0
+
         for scraped_product in scraped_products:
             try:
                 if not scraped_product.product_url or not scraped_product.title:
                     error_count += 1
                     continue
-                # Check if product already exists
+
+                # Check if product already exists within THIS job
                 result = await self.db.execute(
                     select(Product).where(
                         Product.product_url == scraped_product.product_url,
@@ -145,7 +164,7 @@ class ScrapingJobManager:
                     )
                 )
                 existing_product = result.scalars().first()
-                
+
                 if existing_product:
                     duplicate_count += 1
                     # Update price history if price changed
@@ -156,16 +175,24 @@ class ScrapingJobManager:
                         .limit(1)
                     )
                     last_price_record = result.scalars().first()
-                    
-                    if (not last_price_record or 
-                        last_price_record.price != scraped_product.price):
+
+                    if (not last_price_record or last_price_record.price != scraped_product.price):
                         new_price_history = PriceHistory(
                             product_id=existing_product.id,
                             price=scraped_product.price
                         )
                         self.db.add(new_price_history)
                 else:
-                    # Create new product
+                    # Look for existing product across previous jobs to bridge price history
+                    prev_prod_res = await self.db.execute(
+                        select(Product)
+                        .where(Product.product_url == scraped_product.product_url)
+                        .order_by(Product.id.desc())
+                        .limit(1)
+                    )
+                    prev_product = prev_prod_res.scalars().first()
+
+                    # Create new product for current job
                     new_product = Product(
                         job_id=job_id,
                         title=scraped_product.title,
@@ -180,25 +207,43 @@ class ScrapingJobManager:
                         product_url=scraped_product.product_url,
                     )
                     self.db.add(new_product)
-                    await self.db.flush()  # Get the ID
-                    
-                    # Create initial price history
+                    await self.db.flush()  # Generate new product ID
+
+                    # If this product was tracked in earlier jobs, copy forward price history
+                    if prev_product and prev_product.id != new_product.id:
+                        hist_res = await self.db.execute(
+                            select(PriceHistory)
+                            .where(PriceHistory.product_id == prev_product.id)
+                            .order_by(PriceHistory.scraped_at.asc())
+                        )
+                        for prev_h in hist_res.scalars().all():
+                            self.db.add(PriceHistory(
+                                product_id=new_product.id,
+                                price=prev_h.price,
+                                scraped_at=prev_h.scraped_at
+                            ))
+
+                    # Add current scraped price
                     price_history = PriceHistory(
                         product_id=new_product.id,
                         price=scraped_product.price
                     )
                     self.db.add(price_history)
                     saved_count += 1
-                
-                await self.db.commit()
-                
+
             except Exception as e:
                 self.logger.error(
-                    f"Error saving product {scraped_product.title}: {e}",
+                    f"Error processing product {getattr(scraped_product, 'title', '')}: {e}",
                     exc_info=True
                 )
-                await self.db.rollback()
                 error_count += 1
+
+        # Single batch commit for all valid products in this job
+        try:
+            await self.db.commit()
+        except Exception as commit_err:
+            self.logger.error(f"Error committing products batch: {commit_err}", exc_info=True)
+            await self.db.rollback()
 
         return saved_count, duplicate_count, error_count
     

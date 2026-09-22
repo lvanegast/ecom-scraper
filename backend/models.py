@@ -17,6 +17,7 @@ class JobStatus(str, enum.Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 class ScraperSource(str, enum.Enum):
     """Enum for scraper source"""
@@ -48,6 +49,7 @@ class Job(Base):
     
     # Relationships
     products = relationship("Product", back_populates="job", cascade="all, delete-orphan")
+    logs = relationship("JobLog", back_populates="job", cascade="all, delete-orphan", order_by="JobLog.created_at.asc()")
 
 class Product(Base):
     """
@@ -90,3 +92,18 @@ class PriceHistory(Base):
     
     # Relationships
     product = relationship("Product", back_populates="price_history")
+
+class JobLog(Base):
+    """
+    Historical log entries for each job
+    """
+    __tablename__ = "job_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    level = Column(String, default="info")
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    job = relationship("Job", back_populates="logs")
+

@@ -22,10 +22,10 @@ import httpx
 import uvicorn
 
 from database import get_db, engine, Base
-from models import Job, JobStatus, ScraperSource, Product, PriceHistory
+from models import Job, JobStatus, ScraperSource, Product, PriceHistory, JobLog
 from schemas import (
     JobCreate, JobResponse, JobDetailResponse, ProductResponse,
-    ExportFormat, ExportRequest
+    JobLogResponse, ExportFormat, ExportRequest
 )
 from jobs import ScrapingJobManager
 from compare import extract_features, best_match_for
@@ -131,14 +131,26 @@ app.add_middleware(
 
 # ============ Helper Functions ============
 async def create_log_callback(job_id: int):
-    """Create log callback function for scraper"""
+    """Create log callback function for scraper that broadcasts and persists"""
     async def log_callback(message: str, level: str = "info"):
+        now_iso = datetime.now().isoformat()
+        # Broadcast to WebSocket subscribers
         await manager.broadcast(job_id, {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": now_iso,
             "level": level,
             "message": message,
             "job_id": job_id
         })
+        # Persist to database
+        try:
+            from database import async_session
+            async with async_session() as session:
+                log_row = JobLog(job_id=job_id, level=level, message=message)
+                session.add(log_row)
+                await session.commit()
+        except Exception as log_err:
+            logger.warning(f"Could not persist log for job {job_id}: {log_err}")
+
     return log_callback
 
 # ============ API Routes ============
@@ -241,7 +253,9 @@ async def create_job(
         )
         
         return new_job
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating job: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -303,7 +317,52 @@ async def get_job_detail(
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
+    return job
+
+@app.get("/api/jobs/{job_id}/logs", response_model=list[JobLogResponse])
+async def get_job_logs(
+    job_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get persisted log history for a job"""
+    # Verify job exists
+    job_res = await db.execute(select(Job.id).where(Job.id == job_id))
+    if not job_res.scalars().first():
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    result = await db.execute(
+        select(JobLog)
+        .where(JobLog.job_id == job_id)
+        .order_by(JobLog.created_at.asc())
+    )
+    return result.scalars().all()
+
+@app.post("/api/jobs/{job_id}/cancel", response_model=JobResponse)
+async def cancel_job(
+    job_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """Cancel a running or pending job"""
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalars().first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
+        return job
+
+    job.status = JobStatus.CANCELLED
+    job.error_message = "Cancelado por el usuario"
+    await db.commit()
+    await db.refresh(job)
+
+    await manager.broadcast(job_id, {
+        "timestamp": datetime.now().isoformat(),
+        "level": "warning",
+        "message": "🛑 Job cancelado por el usuario.",
+        "job_id": job_id
+    })
     return job
 
 # ============ Product Endpoints ============
@@ -456,6 +515,8 @@ async def compare_latest_jobs(
         for p in amz_products
     }
 
+    usd_cop_rate = float(os.getenv("USD_COP_RATE", "4100.0"))
+
     matches = []
     for ml in ml_products:
         ml_feats = extract_features(ml.title or "")
@@ -467,20 +528,33 @@ async def compare_latest_jobs(
                 "amz_product": None,
                 "score": best_score,
                 "price_diff": None,
+                "price_diff_usd": None,
+                "price_diff_cop": None,
                 "is_confident": False,
             })
             continue
 
         amz = next((p for p in amz_products if p.id == best_id), None)
-        price_diff = None
+        price_diff_usd = None
+        price_diff_cop = None
         if amz and ml.price and amz.price:
-            price_diff = round(amz.price - ml.price, 2)
+            # Normalize both prices to USD
+            ml_curr = (ml.currency or "COP").upper()
+            amz_curr = (amz.currency or "USD").upper()
+
+            ml_usd = ml.price / usd_cop_rate if ml_curr == "COP" else ml.price
+            amz_usd = amz.price if amz_curr == "USD" else amz.price / usd_cop_rate
+
+            price_diff_usd = round(amz_usd - ml_usd, 2)
+            price_diff_cop = round(price_diff_usd * usd_cop_rate, 0)
 
         matches.append({
             "ml_product": _serialize_product(ml),
             "amz_product": _serialize_product(amz) if amz else None,
             "score": best_score,
-            "price_diff": price_diff,
+            "price_diff": price_diff_usd,
+            "price_diff_usd": price_diff_usd,
+            "price_diff_cop": price_diff_cop,
             "is_confident": best_score >= threshold,
         })
 
@@ -488,6 +562,7 @@ async def compare_latest_jobs(
         "ml_job_id": ml_job.id,
         "amz_job_id": amz_job.id,
         "threshold": threshold,
+        "usd_cop_rate": usd_cop_rate,
         "results": matches,
     }
 
